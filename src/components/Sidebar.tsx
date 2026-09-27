@@ -27,8 +27,8 @@ export default function Sidebar() {
             <span className="material-symbols-outlined text-inverse-primary text-xl">satellite_alt</span>
           </div>
           <div>
-            <h2 className="text-sm font-bold text-primary">SAT AI Portal</h2>
-            <p className="text-xs text-on-surface-variant">Government of India</p>
+            <h2 className="text-sm font-extrabold text-[#0F172A]">SATQUERY AI</h2>
+            <p className="text-[11px] text-on-surface-variant font-medium">Government of India</p>
           </div>
         </div>
 
@@ -39,9 +39,9 @@ export default function Sidebar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-semibold transition duration-200 ${
+                className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-bold transition duration-200 ${
                   isActive
-                    ? 'bg-primary-container text-on-primary font-bold shadow-sm'
+                    ? 'bg-[#0F172A] text-white font-extrabold shadow-sm'
                     : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
                 }`}
               >

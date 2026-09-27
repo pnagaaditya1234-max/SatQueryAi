@@ -19,7 +19,7 @@ export default function GovtFooter() {
               />
               <div>
                 <h3 className="font-extrabold text-base tracking-tight">Government of India</h3>
-                <p className="text-xs text-amber-400 font-semibold">SAT AI – Satellite Intelligence Platform</p>
+                <p className="text-xs text-amber-400 font-semibold">SATQUERY AI – Satellite Intelligence Platform</p>
               </div>
             </div>
 
@@ -172,7 +172,7 @@ export default function GovtFooter() {
               Version 1.0
             </span>
             <span className="bg-amber-500/20 text-amber-300 px-2.5 py-0.5 rounded font-mono text-[11px] border border-amber-500/30">
-              Government of India Prototype
+              Prototype for Smart India Hackathon 2026
             </span>
           </div>
         </div>
