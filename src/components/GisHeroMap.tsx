@@ -28,8 +28,9 @@ export default function GisHeroMap() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maptilersdk.Map | null>(null);
   const drawRef = useRef<MapboxDraw | null>(null);
+
 // Read API key from Netlify / .env.local
-const MAPTILER_KEY = process.env.NEXT_PUBLIC_SATQUERY_MAP_KEY;
+const MAPTILER_KEY = process.env.NEXT_PUBLIC_SATQUERY_MAP_KEY as string;
 
 if (!MAPTILER_KEY) {
   throw new Error("NEXT_PUBLIC_SATQUERY_MAP_KEY is missing.");
@@ -230,7 +231,6 @@ maptilersdk.config.apiKey = MAPTILER_KEY;
   useEffect(() => {
   if (!mapContainerRef.current || mapRef.current) return;
 
-  // Configure MapTiler SDK key
   if (!MAPTILER_KEY) {
     console.error("NEXT_PUBLIC_SATQUERY_MAP_KEY is missing.");
     return;
@@ -270,18 +270,14 @@ maptilersdk.config.apiKey = MAPTILER_KEY;
         };
 
     // Initialize MapTiler Map
-    const map = new maptilersdk.Map({
-      container: mapContainerRef.current,
-      style: defaultSatelliteStyle as any,
-      center: [78.9629, 20.5937], // India Center: Longitude 78.9629, Latitude 20.5937
-      zoom: 4.5, // Initial Zoom 4.5
-      pitch: 0,
-      bearing: 0,
-      navigationControl: false, // Custom control positioning below
-      geolocateControl: false,
-      scaleControl: false,
-      fullscreenControl: false,
-    });
+const map = new maptilersdk.Map({
+  container: mapContainerRef.current!, // Important
+  style: maptilersdk.MapStyle.SATELLITE, // Use official style
+  center: [78.9629, 20.5937], // India
+  zoom: 4.5,
+  pitch: 0,
+  bearing: 0,
+});
 
     mapRef.current = map;
 
@@ -393,27 +389,39 @@ maptilersdk.config.apiKey = MAPTILER_KEY;
       loadPresetPolygon(selectedPreset);
     });
 
-    // Destroy map on component unmount to avoid duplicate initialization
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, []);
+    // Change Map Style Layer
+const handleLayerChange = (
+  layer: "Satellite" | "Terrain" | "Streets" | "Hybrid"
+) => {
+  setActiveLayer(layer);
+  setShowLayerMenu(false);
 
-  // Change Map Style Layer
-  const handleLayerChange = (layer: 'Satellite' | 'Terrain' | 'Streets' | 'Hybrid') => {
-    setActiveLayer(layer);
-    setShowLayerMenu(false);
-    if (!mapRef.current) return;
+  if (!mapRef.current) return;
 
-    if (layer === 'Satellite') {
+  switch (layer) {
+    case "Satellite":
       mapRef.current.setStyle(maptilersdk.MapStyle.SATELLITE);
-    } else if (layer === 'Terrain') {
+      break;
+
+    case "Terrain":
       mapRef.current.setStyle(maptilersdk.MapStyle.TOPO);
-    } else if (layer === 'Hybrid') {
+      break;
+
+    case "Hybrid":
       mapRef.current.setStyle(maptilersdk.MapStyle.HYBRID);
+      break;
+
+    case "Streets":
+      mapRef.current.setStyle(maptilersdk.MapStyle.STREETS);
+      break;
+  }
+
+  mapRef.current.once("style.load", () => {
+    if (drawRef.current) {
+      loadPresetPolygon(selectedPreset);
+    }
+  });
+};
     } else if (layer === 'Streets') {
       mapRef.current.setStyle(maptilersdk.MapStyle.STREETS);
     }
