@@ -4,7 +4,9 @@ import React, { useState } from 'react';
 import GovtHeader from '@/components/GovtHeader';
 import Footer from '@/components/Footer';
 import UploadModal from '@/components/UploadModal';
-import GisHeroMap from '@/components/GisHeroMap';
+import dynamic from 'next/dynamic';
+
+const GisHeroMap = dynamic(() => import('@/components/GisHeroMap'), { ssr: false });
 import Link from 'next/link';
 
 export default function HomePage() {

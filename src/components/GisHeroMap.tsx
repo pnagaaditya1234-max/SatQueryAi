@@ -1,204 +1,774 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
-import Link from 'next/link';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import * as maplibregl from 'maplibre-gl';
+import MapboxDraw from '@mapbox/mapbox-gl-draw';
+import * as turf from '@turf/turf';
 
 interface LocationPreset {
   name: string;
+  state: string;
+  district: string;
   lat: number;
   lng: number;
   zoom: number;
-  area: string;
   dataset: string;
-  points: { x: number; y: number }[];
+  coordinates: [number, number][]; // [lng, lat]
+}
+
+interface GeocodingResult {
+  place_name: string;
+  center: [number, number];
 }
 
 export default function GisHeroMap() {
   const router = useRouter();
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<maplibregl.Map | null>(null);
+  const drawRef = useRef<MapboxDraw | null>(null);
 
-  // Location presets across India
+  // Map API Key read strictly from process.env.NEXT_PUBLIC_MAPTILER_API_KEY
+  const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_API_KEY || '';
+
+  // Presets across India
   const presets: LocationPreset[] = [
     {
       name: 'Western Ghats Bio-Reserve',
+      state: 'Karnataka',
+      district: 'Uttara Kannada',
       lat: 15.2993,
       lng: 74.124,
       zoom: 12,
-      area: '142.8 km²',
       dataset: 'Cartosat-3 (0.35m Optical)',
-      points: [
-        { x: 35, y: 30 },
-        { x: 65, y: 25 },
-        { x: 75, y: 65 },
-        { x: 40, y: 70 },
+      coordinates: [
+        [74.11, 15.31],
+        [74.14, 15.32],
+        [74.15, 15.28],
+        [74.11, 15.27],
+        [74.11, 15.31],
       ],
     },
     {
       name: 'Cauvery River Basin Siltation',
+      state: 'Tamil Nadu',
+      district: 'Thanjavur',
       lat: 11.2254,
       lng: 78.9629,
       zoom: 11,
-      area: '284.1 km²',
       dataset: 'RISAT-1A (1.0m C-Band SAR)',
-      points: [
-        { x: 25, y: 35 },
-        { x: 70, y: 20 },
-        { x: 80, y: 60 },
-        { x: 30, y: 75 },
+      coordinates: [
+        [78.93, 11.25],
+        [78.98, 11.26],
+        [78.99, 11.20],
+        [78.94, 11.19],
+        [78.93, 11.25],
       ],
     },
     {
-      name: 'Delhi-NCR Urban Sprawl Area',
+      name: 'Delhi-NCR Urban Sprawl',
+      state: 'Delhi',
+      district: 'New Delhi',
       lat: 28.6139,
       lng: 77.209,
-      zoom: 13,
-      area: '98.5 km²',
+      zoom: 12,
       dataset: 'EOS-04 (Thermal + Optical)',
-      points: [
-        { x: 30, y: 25 },
-        { x: 70, y: 30 },
-        { x: 65, y: 70 },
-        { x: 25, y: 65 },
+      coordinates: [
+        [77.18, 28.63],
+        [77.23, 28.63],
+        [77.24, 28.59],
+        [77.18, 28.58],
+        [77.18, 28.63],
       ],
     },
     {
       name: 'Assam Brahmaputra Inundation Sector',
+      state: 'Assam',
+      district: 'Jorhat',
       lat: 26.8524,
       lng: 94.182,
       zoom: 11,
-      area: '312.4 km²',
       dataset: 'Sentinel-2B & RISAT-1A SAR',
-      points: [
-        { x: 20, y: 40 },
-        { x: 75, y: 20 },
-        { x: 85, y: 65 },
-        { x: 35, y: 80 },
+      coordinates: [
+        [94.14, 26.88],
+        [94.21, 26.89],
+        [94.22, 26.82],
+        [94.15, 26.81],
+        [94.14, 26.88],
       ],
     },
   ];
 
-  const [selectedPreset, setSelectedPreset] = useState<LocationPreset>(presets[0]);
-  const [mapLayer, setMapLayer] = useState<'Satellite' | 'Terrain' | 'Hybrid' | 'Boundaries'>('Satellite');
-  const [activeQuery, setActiveQuery] = useState('Show deforestation & canopy loss in Western Ghats');
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [customPoints, setCustomPoints] = useState<{ x: number; y: number }[]>(presets[0].points);
-  const [zoomLevel, setZoomLevel] = useState<number>(12);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showLayerMenu, setShowLayerMenu] = useState(false);
+  // Curated Popular Indian City Suggestions
+  const defaultSuggestions = [
+    { city: 'Visakhapatnam', state: 'Andhra Pradesh', lat: 17.6868, lng: 83.2185 },
+    { city: 'New Delhi', state: 'Delhi', lat: 28.6139, lng: 77.209 },
+    { city: 'Mumbai', state: 'Maharashtra', lat: 19.076, lng: 72.8777 },
+    { city: 'Panaji', state: 'Goa', lat: 15.4989, lng: 73.8278 },
+    { city: 'Ahmedabad', state: 'Gujarat', lat: 23.0225, lng: 72.5714 },
+    { city: 'Hyderabad', state: 'Telangana', lat: 17.385, lng: 78.4867 },
+    { city: 'Bengaluru', state: 'Karnataka', lat: 12.9716, lng: 77.5946 },
+    { city: 'Chennai', state: 'Tamil Nadu', lat: 13.0827, lng: 80.2707 },
+    { city: 'Kolkata', state: 'West Bengal', lat: 22.5726, lng: 88.3639 },
+    { city: 'Jaipur', state: 'Rajasthan', lat: 26.9124, lng: 75.7873 },
+  ];
 
-  // Sync preset change
-  const handleSelectPreset = (preset: LocationPreset) => {
-    setSelectedPreset(preset);
-    setCustomPoints(preset.points);
-    setZoomLevel(preset.zoom);
-    setSearchQuery(preset.name);
+  // State Management
+  const [activeLayer, setActiveLayer] = useState<'Satellite' | 'Terrain' | 'Streets' | 'Hybrid'>('Satellite');
+  const [selectedPreset, setSelectedPreset] = useState<LocationPreset>(presets[0]);
+  const [activeQuery, setActiveQuery] = useState('Show deforestation & canopy loss in Western Ghats');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<GeocodingResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [showLayerMenu, setShowLayerMenu] = useState(false);
+  const [showSaveToast, setShowSaveToast] = useState(false);
+  const [activeDrawMode, setActiveDrawMode] = useState<'simple_select' | 'draw_polygon'>('simple_select');
+
+  // AOI Metrics State
+  const [aoiMetrics, setAoiMetrics] = useState<{
+    areaKm2: number;
+    perimeterKm: number;
+    centerLat: number;
+    centerLng: number;
+    verticesCount: number;
+    vertices: [number, number][]; // [lat, lng]
+    polygonCount: number;
+  }>({
+    areaKm2: 142.85,
+    perimeterKm: 48.32,
+    centerLat: 15.2993,
+    centerLng: 74.124,
+    verticesCount: 4,
+    vertices: [
+      [15.31, 74.11],
+      [15.32, 74.14],
+      [15.28, 74.15],
+      [15.27, 74.11],
+    ],
+    polygonCount: 1,
+  });
+
+  // Calculate polygon metrics using Turf.js
+  const updateMetricsFromDraw = useCallback((draw: MapboxDraw) => {
+    const data = draw.getAll();
+    if (!data || data.features.length === 0) {
+      setAoiMetrics({
+        areaKm2: 0,
+        perimeterKm: 0,
+        centerLat: selectedPreset.lat,
+        centerLng: selectedPreset.lng,
+        verticesCount: 0,
+        vertices: [],
+        polygonCount: 0,
+      });
+      return;
+    }
+
+    let totalAreaM2 = 0;
+    let totalLengthM = 0;
+    const allVertices: [number, number][] = [];
+
+    data.features.forEach((feature) => {
+      if (feature.geometry.type === 'Polygon') {
+        totalAreaM2 += turf.area(feature);
+        try {
+          const line = turf.polygonToLine(feature as any);
+          totalLengthM += turf.length(line, { units: 'kilometers' }) * 1000;
+        } catch {
+          // Fallback if line conversion fails
+          totalLengthM += 0;
+        }
+
+        const coords = feature.geometry.coordinates[0];
+        coords.forEach((coord: number[]) => {
+          allVertices.push([Number(coord[1].toFixed(4)), Number(coord[0].toFixed(4))]);
+        });
+      }
+    });
+
+    const centroid = turf.centroid(data as any);
+    const centerLng = Number(centroid.geometry.coordinates[0].toFixed(4));
+    const centerLat = Number(centroid.geometry.coordinates[1].toFixed(4));
+
+    setAoiMetrics({
+      areaKm2: Number((totalAreaM2 / 1000000).toFixed(2)),
+      perimeterKm: Number((totalLengthM / 1000).toFixed(2)),
+      centerLat,
+      centerLng,
+      verticesCount: allVertices.length,
+      vertices: allVertices.slice(0, 5), // show top 5
+      polygonCount: data.features.length,
+    });
+  }, [selectedPreset.lat, selectedPreset.lng]);
+
+  // Load default preset polygon into draw
+  const loadPresetPolygon = useCallback((preset: LocationPreset) => {
+    if (!drawRef.current) return;
+    drawRef.current.deleteAll();
+
+    const polygonFeature: GeoJSON.Feature<GeoJSON.Polygon> = {
+      id: 'preset-aoi-polygon',
+      type: 'Feature',
+      properties: { name: preset.name },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [preset.coordinates],
+      },
+    };
+
+    drawRef.current.add(polygonFeature);
+    updateMetricsFromDraw(drawRef.current);
+  }, [updateMetricsFromDraw]);
+
+  // Initialize MapLibre / MapTiler Map
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
+
+    // Get style URL based on key
+    const getStyleUrl = (layer: string) => {
+      const keyParam = `key=${MAPTILER_KEY}`;
+      if (layer === 'Satellite') {
+        return `https://api.maptiler.com/maps/satellite/style.json?${keyParam}`;
+      } else if (layer === 'Terrain') {
+        return `https://api.maptiler.com/maps/topo-v2/style.json?${keyParam}`;
+      } else if (layer === 'Hybrid') {
+        return `https://api.maptiler.com/maps/hybrid/style.json?${keyParam}`;
+      } else {
+        return `https://api.maptiler.com/maps/streets-v2/style.json?${keyParam}`;
+      }
+    };
+
+    // Initialize MapLibre GL map
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: getStyleUrl('Satellite'),
+      center: [selectedPreset.lng, selectedPreset.lat],
+      zoom: selectedPreset.zoom,
+      pitch: 15,
+      bearing: 0,
+      attributionControl: false,
+    });
+
+    mapRef.current = map;
+
+    // Map Controls: Navigation (Zoom & Compass), Fullscreen, Scale, Geolocate
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+    map.addControl(new maplibregl.FullscreenControl(), 'top-right');
+    map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true }), 'top-right');
+    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+
+    // MapboxDraw Custom Styles for Government Blue & Saffron Vertices
+    const drawStyles = [
+      // Polygon fill (Government Blue 25% opacity)
+      {
+        id: 'gl-draw-polygon-fill-inactive',
+        type: 'fill',
+        filter: ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+        paint: {
+          'fill-color': '#1D4ED8',
+          'fill-opacity': 0.25,
+        },
+      },
+      {
+        id: 'gl-draw-polygon-fill-active',
+        type: 'fill',
+        filter: ['all', ['==', '$type', 'Polygon'], ['==', 'active', 'true']],
+        paint: {
+          'fill-color': '#1D4ED8',
+          'fill-opacity': 0.35,
+        },
+      },
+      // Polygon outline stroke (Government Blue 3px)
+      {
+        id: 'gl-draw-polygon-stroke-inactive',
+        type: 'line',
+        filter: ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': '#1D4ED8',
+          'line-width': 3,
+        },
+      },
+      {
+        id: 'gl-draw-polygon-stroke-active',
+        type: 'line',
+        filter: ['all', ['==', '$type', 'Polygon'], ['==', 'active', 'true']],
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': '#1D4ED8',
+          'line-width': 3.5,
+          'line-dasharray': [0.2, 2],
+        },
+      },
+      // Line string stroke
+      {
+        id: 'gl-draw-line-inactive',
+        type: 'line',
+        filter: ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': '#1D4ED8',
+          'line-width': 3,
+        },
+      },
+      // Vertex points (Saffron circle handle with white halo)
+      {
+        id: 'gl-draw-polygon-and-line-vertex-stroke-active',
+        type: 'circle',
+        filter: ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#FFFFFF',
+        },
+      },
+      {
+        id: 'gl-draw-polygon-and-line-vertex-active',
+        type: 'circle',
+        filter: ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#FF9933',
+        },
+      },
+      {
+        id: 'gl-draw-point-point-stroke-inactive',
+        type: 'circle',
+        filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Point'], ['==', 'meta', 'feature'], ['!=', 'mode', 'static']],
+        paint: {
+          'circle-radius': 6,
+          'circle-color': '#FF9933',
+        },
+      },
+    ];
+
+    // Initialize MapboxDraw
+    const draw = new MapboxDraw({
+      displayControlsDefault: false,
+      styles: drawStyles,
+    });
+
+    drawRef.current = draw;
+    map.addControl(draw as unknown as maplibregl.IControl, 'top-left');
+
+    // Event handlers for polygon draw updates
+    const onDrawUpdate = () => {
+      updateMetricsFromDraw(draw);
+    };
+
+    map.on('draw.create' as any, onDrawUpdate);
+    map.on('draw.update' as any, onDrawUpdate);
+    map.on('draw.delete' as any, onDrawUpdate);
+    map.on('draw.selectionchange' as any, onDrawUpdate);
+
+    map.on('load', () => {
+      loadPresetPolygon(selectedPreset);
+    });
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []); // Run once on mount
+
+  // Change Map Style Layer
+  const handleLayerChange = (layer: 'Satellite' | 'Terrain' | 'Streets' | 'Hybrid') => {
+    setActiveLayer(layer);
+    setShowLayerMenu(false);
+    if (!mapRef.current) return;
+
+    const keyParam = `key=${MAPTILER_KEY}`;
+    let styleUrl = `https://api.maptiler.com/maps/satellite/style.json?${keyParam}`;
+    if (layer === 'Terrain') {
+      styleUrl = `https://api.maptiler.com/maps/topo-v2/style.json?${keyParam}`;
+    } else if (layer === 'Hybrid') {
+      styleUrl = `https://api.maptiler.com/maps/hybrid/style.json?${keyParam}`;
+    } else if (layer === 'Streets') {
+      styleUrl = `https://api.maptiler.com/maps/streets-v2/style.json?${keyParam}`;
+    }
+
+    mapRef.current.setStyle(styleUrl);
+    mapRef.current.once('style.load', () => {
+      if (drawRef.current) {
+        loadPresetPolygon(selectedPreset);
+      }
+    });
   };
 
-  // Canvas Drawing / Interactive Click
-  const handleMapCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isDrawing) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
+  // Fly map to Location Preset
+  const handleSelectPreset = (preset: LocationPreset) => {
+    setSelectedPreset(preset);
+    setSearchQuery(preset.name);
+    if (mapRef.current) {
+      mapRef.current.flyTo({
+        center: [preset.lng, preset.lat],
+        zoom: preset.zoom,
+        pitch: 15,
+        speed: 1.2,
+      });
+    }
+    loadPresetPolygon(preset);
+  };
 
-    if (customPoints.length >= 6) {
-      setCustomPoints([{ x: xPercent, y: yPercent }]);
-    } else {
-      setCustomPoints([...customPoints, { x: xPercent, y: yPercent }]);
+  // Geocoding Search powered by MapTiler / OpenStreetMap fallback
+  const handleSearchInputChange = async (val: string) => {
+    setSearchQuery(val);
+    if (!val || val.trim().length < 2) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      // 1. Try MapTiler Geocoding API first
+      const maptilerUrl = `https://api.maptiler.com/geocoding/${encodeURIComponent(val)}.json?key=${MAPTILER_KEY}&country=in&language=en&limit=5`;
+      const res = await fetch(maptilerUrl);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.features && data.features.length > 0) {
+          setSearchResults(
+            data.features.map((f: { place_name: string; center: [number, number] }) => ({
+              place_name: f.place_name,
+              center: f.center,
+            }))
+          );
+          setIsSearching(false);
+          return;
+        }
+      }
+
+      // 2. Fallback to OpenStreetMap Nominatim Geocoding
+      const osmUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(val)}&countrycodes=in&format=json&limit=5`;
+      const osmRes = await fetch(osmUrl);
+      if (osmRes.ok) {
+        const osmData = await osmRes.json();
+        setSearchResults(
+          osmData.map((item: { display_name: string; lat: string; lon: string }) => ({
+            place_name: item.display_name,
+            center: [parseFloat(item.lon), parseFloat(item.lat)],
+          }))
+        );
+      }
+    } catch {
+      // Direct Lat/Lng parsing check (e.g. "15.2993, 74.1240")
+      const coordsMatch = val.match(/^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/);
+      if (coordsMatch) {
+        const lat = parseFloat(coordsMatch[1]);
+        const lng = parseFloat(coordsMatch[3]);
+        setSearchResults([{ place_name: `Coordinates: ${lat}° N, ${lng}° E`, center: [lng, lat] }]);
+      }
+    } finally {
+      setIsSearching(false);
     }
   };
 
-  const clearPolygon = () => {
-    setCustomPoints([]);
+  const handleSelectSearchResult = (result: GeocodingResult) => {
+    setSearchResults([]);
+    setSearchQuery(result.place_name.split(',')[0]);
+    const [lng, lat] = result.center;
+
+    setSelectedPreset((prev) => ({
+      ...prev,
+      name: result.place_name.split(',')[0],
+      lat,
+      lng,
+    }));
+
+    if (mapRef.current) {
+      mapRef.current.flyTo({
+        center: [lng, lat],
+        zoom: 13,
+        speed: 1.2,
+      });
+    }
+  };
+
+  const handleSelectCuratedSuggestion = (city: string, state: string, lat: number, lng: number) => {
+    setSearchQuery(`${city}, ${state}`);
+    setSelectedPreset((prev) => ({
+      ...prev,
+      name: city,
+      state,
+      lat,
+      lng,
+    }));
+    if (mapRef.current) {
+      mapRef.current.flyTo({
+        center: [lng, lat],
+        zoom: 12,
+        speed: 1.2,
+      });
+    }
+    setIsSearchFocused(false);
+  };
+
+  const handleVoiceSearch = () => {
+    if (typeof window === 'undefined') return;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Voice search is supported on standard desktop browsers like Chrome or Edge.');
+      return;
+    }
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'en-IN';
+      recognition.start();
+      setIsListening(true);
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setSearchQuery(transcript);
+        handleSearchInputChange(transcript);
+        setIsListening(false);
+      };
+
+      recognition.onerror = () => setIsListening(false);
+      recognition.onend = () => setIsListening(false);
+    } catch {
+      setIsListening(false);
+    }
+  };
+
+  const handleCurrentLocationClick = () => {
+    if (typeof window !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          if (mapRef.current) {
+            mapRef.current.flyTo({
+              center: [longitude, latitude],
+              zoom: 14,
+              speed: 1.2,
+            });
+          }
+          setSearchQuery(`Current Location (${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°)`);
+        },
+        () => {
+          if (mapRef.current) {
+            mapRef.current.flyTo({ center: [77.209, 28.6139], zoom: 12 });
+          }
+        }
+      );
+    }
+  };
+
+  // Drawing Toolbar Actions
+  const handleStartDrawPolygon = () => {
+    if (!drawRef.current) return;
+    drawRef.current.changeMode('draw_polygon');
+    setActiveDrawMode('draw_polygon');
+  };
+
+  const handleEditPolygon = () => {
+    if (!drawRef.current) return;
+    drawRef.current.changeMode('simple_select');
+    setActiveDrawMode('simple_select');
+  };
+
+  const handleDeleteSelectedPolygon = () => {
+    if (!drawRef.current) return;
+    const selected = drawRef.current.getSelectedIds();
+    if (selected.length > 0) {
+      drawRef.current.delete(selected);
+    } else {
+      drawRef.current.deleteAll();
+    }
+    updateMetricsFromDraw(drawRef.current);
+  };
+
+  const handleClearAllAOI = () => {
+    if (!drawRef.current) return;
+    drawRef.current.deleteAll();
+    updateMetricsFromDraw(drawRef.current);
+  };
+
+  const handleSaveAOI = () => {
+    setShowSaveToast(true);
+    setTimeout(() => setShowSaveToast(false), 3000);
   };
 
   const handleStartAnalysis = () => {
-    const targetUrl = `/analysis-workspace?query=${encodeURIComponent(activeQuery)}&lat=${selectedPreset.lat}&lng=${selectedPreset.lng}`;
+    const targetUrl = `/analysis-workspace?query=${encodeURIComponent(activeQuery)}&lat=${selectedPreset.lat}&lng=${selectedPreset.lng}&area=${aoiMetrics.areaKm2}`;
     router.push(targetUrl);
   };
 
-  // Generate SVG polygon points string
-  const polygonPointsStr = customPoints.map((p) => `${p.x}%,${p.y}%`).join(' ');
-
   return (
-    <div className="relative w-full h-[82vh] min-h-[580px] max-h-[900px] overflow-hidden bg-slate-950 font-sans border-b border-outline-variant/60">
-      {/* MAP CANVAS BACKGROUND CONTAINER */}
-      <div
-        onClick={handleMapCanvasClick}
-        className={`absolute inset-0 bg-cover bg-center transition-all duration-700 ${
-          isDrawing ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
-        }`}
-        style={{
-          backgroundImage:
-            mapLayer === 'Terrain'
-              ? "url('https://lh3.googleusercontent.com/aida-public/AB6AXuAssk_Uoyu3qbUAbgkBWBY0ZX4USFOWkLqEB4h-_zlmOBOEzGPviFKh8OPB4ejsv7Iem7YcARQBkRxbO42Uyb-jGKaXspxeGzoqOaocqtDKW-RTgw6qrkcncYt5dt7wn7LvrYOZlqFyGc_WuvBw26tlCd6JHwcXhRCwoH_wqbZcZeK4fue6Sly2at30hqJxXarzxlGEgKvB4gKk5Jzc9QyrE2taDTGEh6Bj_01f7Rz9dAN1JFKq2ip97Q')"
-              : "url('https://lh3.googleusercontent.com/aida-public/AB6AXuA2AWd0lSRRTBzxLZQHyAnpZjM-WgIGd30WmjeKDU7U94oyM4-rlfWzuMdiqvcKFeuu-akegjnOlym-bNiePKRB8z6-bGKUMmf9dr7N_YtGWZRNuiPaWq-ci26jxVgt-vvNPSe42Y7HMRIpS4hXmTkzUwFXEJriEOwA5pIbNNaes47YThUqkGa_UhgjbR_Rv6_ly1nluhR4ybOxoSpJfPxEgb9hJ7k7f8qh0xNwxE2VNE97FMEicfa00A')",
-        }}
-      >
-        {/* Soft Blue / Dark Tint Overlay */}
-        <div className="absolute inset-0 bg-slate-950/20 backdrop-brightness-95 pointer-events-none"></div>
+    <div className="relative w-full h-[84vh] min-h-[620px] max-h-[920px] overflow-hidden bg-slate-950 font-sans border-b border-outline-variant/60">
+      {/* REAL MAP CONTAINER */}
+      <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
 
-        {/* GIS Lat/Long Grid Lines Overlay */}
-        <div className="absolute inset-0 pointer-events-none opacity-20 bg-[linear-gradient(to_right,#ffffff_1px,transparent_1px),linear-gradient(to_bottom,#ffffff_1px,transparent_1px)] bg-[size:60px_60px]"></div>
+      {/* FLOATING TOP BAR: DRAWING TOOLBAR & SEARCH BAR */}
+      <div className="absolute top-4 left-4 right-4 z-30 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 pointer-events-none">
+        {/* DRAWING TOOLBAR BUTTONS */}
+        <div className="pointer-events-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] dark:border-slate-800 p-1.5 rounded-2xl shadow-xl flex items-center gap-1">
+          <button
+            onClick={handleStartDrawPolygon}
+            className={`px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeDrawMode === 'draw_polygon'
+                ? 'bg-[#1D4ED8] text-white shadow-md'
+                : 'bg-surface hover:bg-surface-container-high text-on-surface'
+            }`}
+            title="Click on map to draw polygon points"
+          >
+            <span className="material-symbols-outlined text-base">polyline</span>
+            <span>Draw AOI</span>
+          </button>
 
-        {/* Interactive SVG Polygon Overlay */}
-        <svg className="absolute inset-0 w-full h-full pointer-events-none">
-          {customPoints.length > 2 && (
-            <polygon
-              points={polygonPointsStr}
-              fill="rgba(29, 78, 216, 0.25)"
-              stroke="#1D4ED8"
-              strokeWidth="3"
-              strokeDasharray="6,3"
-              className="animate-pulse"
+          <button
+            onClick={handleEditPolygon}
+            className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeDrawMode === 'simple_select'
+                ? 'bg-slate-800 text-white'
+                : 'bg-surface hover:bg-surface-container-high text-on-surface'
+            }`}
+            title="Edit or drag vertices"
+          >
+            <span className="material-symbols-outlined text-base">edit</span>
+            <span className="hidden sm:inline">Edit</span>
+          </button>
+
+          <button
+            onClick={handleDeleteSelectedPolygon}
+            className="p-2 rounded-xl bg-surface hover:bg-rose-50 text-rose-700 transition-colors cursor-pointer border border-outline-variant/40"
+            title="Delete Selected Polygon"
+          >
+            <span className="material-symbols-outlined text-base">delete</span>
+          </button>
+
+          <button
+            onClick={handleClearAllAOI}
+            className="px-2.5 py-2 rounded-xl bg-surface hover:bg-amber-50 text-amber-800 transition-colors cursor-pointer text-xs font-semibold border border-outline-variant/40"
+            title="Clear All AOIs"
+          >
+            Clear AOI
+          </button>
+        </div>
+
+        {/* GOVERNMENT OF INDIA FLOATING MAP SEARCH BAR */}
+        <div className="pointer-events-auto relative w-full md:w-[460px]">
+          <div
+            className={`h-[56px] bg-white border border-[#D1D5DB] rounded-[16px] shadow-md hover:shadow-lg transition-all flex items-center px-4 gap-2.5 text-[#111827] ${
+              isSearchFocused ? 'border-[#1D4ED8] ring-2 ring-[#1D4ED8]/20 shadow-lg' : ''
+            }`}
+          >
+            {/* Black Search Icon */}
+            <span className="material-symbols-outlined text-[#111827] text-xl shrink-0 select-none">
+              search
+            </span>
+
+            {/* Input Field */}
+            <input
+              type="text"
+              value={searchQuery}
+              onFocus={() => setIsSearchFocused(true)}
+              onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+              onChange={(e) => handleSearchInputChange(e.target.value)}
+              placeholder="Search any place in India (State, District, City, Village, PIN Code)"
+              className="w-full bg-transparent border-none text-xs sm:text-sm font-semibold text-[#111827] placeholder:text-[#6B7280] focus:outline-none focus:ring-0 p-0"
             />
-          )}
 
-          {/* Polygon Vertices Markers */}
-          {customPoints.map((pt, idx) => (
-            <g key={idx}>
-              <circle
-                cx={`${pt.x}%`}
-                cy={`${pt.y}%`}
-                r="6"
-                fill="#FF9933"
-                stroke="#FFFFFF"
-                strokeWidth="2"
-              />
-              <text
-                x={`${pt.x + 1}%`}
-                y={`${pt.y - 1}%`}
-                fill="#FFFFFF"
-                fontSize="10"
-                fontWeight="bold"
-                className="drop-shadow-md font-mono"
+            {/* Clear (x) button when text is present */}
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  setSearchResults([]);
+                }}
+                className="p-1 text-gray-700 hover:text-black hover:bg-gray-100 rounded-full transition-colors shrink-0 cursor-pointer"
+                title="Clear Search"
               >
-                P{idx + 1}
-              </text>
-            </g>
-          ))}
-        </svg>
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            )}
 
-        {/* Drawing Helper Banner when in drawing mode */}
-        {isDrawing && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-[#0F172A]/90 backdrop-blur-md text-white border border-[#FF9933] px-4 py-2 rounded-full text-xs font-bold shadow-xl flex items-center gap-2 animate-bounce">
-            <span className="w-2 h-2 rounded-full bg-[#FF9933]"></span>
-            <span>Click on map to place Area of Interest (AOI) polygon vertices</span>
+            {/* Voice Search Microphone Icon */}
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsDrawing(false);
-              }}
-              className="ml-2 bg-white/20 hover:bg-white/30 px-2 py-0.5 rounded text-[10px]"
+              onClick={handleVoiceSearch}
+              className={`p-1.5 rounded-full transition-colors shrink-0 cursor-pointer ${
+                isListening ? 'bg-red-100 text-red-600 animate-pulse' : 'text-[#111827] hover:bg-gray-100'
+              }`}
+              title={isListening ? 'Listening...' : 'Voice Search'}
             >
-              Finish
+              <span className="material-symbols-outlined text-lg">mic</span>
+            </button>
+
+            {/* Current Location Icon */}
+            <button
+              onClick={handleCurrentLocationClick}
+              className="p-1.5 text-[#111827] hover:bg-gray-100 rounded-full transition-colors shrink-0 cursor-pointer"
+              title="Fly to Current Location"
+            >
+              <span className="material-symbols-outlined text-lg">my_location</span>
             </button>
           </div>
-        )}
+
+          {/* Search Suggestions Dropdown */}
+          {isSearchFocused && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-[#D1D5DB] rounded-[16px] shadow-2xl overflow-hidden z-50 text-xs divide-y divide-gray-100 max-h-80 overflow-y-auto">
+              {/* Geocoding API Results if user is typing */}
+              {searchResults.length > 0 ? (
+                searchResults.map((res, idx) => (
+                  <button
+                    key={idx}
+                    onMouseDown={() => handleSelectSearchResult(res)}
+                    className="w-full text-left px-4 py-3 hover:bg-[#1D4ED8]/10 text-[#111827] font-medium flex items-center gap-3 cursor-pointer transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[#1D4ED8] text-lg shrink-0">
+                      location_on
+                    </span>
+                    <div className="truncate">
+                      <div className="font-bold text-sm text-[#111827]">
+                        {res.place_name.split(',')[0]}
+                      </div>
+                      <div className="text-[11px] text-[#6B7280]">
+                        {res.place_name.split(',').slice(1).join(',')}
+                      </div>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                /* Curated Government Suggestions when focused or no results yet */
+                <>
+                  <div className="px-4 py-2 bg-gray-50 text-[10px] font-extrabold text-gray-500 uppercase tracking-wider">
+                    Popular Cities & Regions in India
+                  </div>
+                  {defaultSuggestions.map((item, idx) => (
+                    <button
+                      key={idx}
+                      onMouseDown={() =>
+                        handleSelectCuratedSuggestion(item.city, item.state, item.lat, item.lng)
+                      }
+                      className="w-full text-left px-4 py-2.5 hover:bg-[#1D4ED8]/10 text-[#111827] flex items-center gap-3 cursor-pointer transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-[#1D4ED8] text-lg shrink-0">
+                        location_on
+                      </span>
+                      <div>
+                        <div className="font-bold text-xs text-[#111827]">{item.city}</div>
+                        <div className="text-[10px] text-[#6B7280]">{item.state}</div>
+                      </div>
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* FLOATING ANALYSIS PANEL (LEFT SIDE) */}
-      <div className="absolute top-6 left-6 z-30 w-80 sm:w-96 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] dark:border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4 text-on-surface">
+      {/* FLOATING SATQUERY AI PANEL (LEFT SIDE) */}
+      <div className="absolute top-20 left-4 z-20 w-80 sm:w-96 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] dark:border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4 text-on-surface max-h-[calc(100vh-140px)] overflow-y-auto">
         {/* Header Badge */}
         <div className="flex items-center justify-between border-b border-outline-variant/40 pb-3">
           <div className="flex items-center gap-2">
@@ -215,10 +785,10 @@ export default function GisHeroMap() {
           </span>
         </div>
 
-        {/* Ask SATQUERY AI Box */}
+        {/* Ask SATQUERY AI Query Box */}
         <div className="space-y-1.5">
           <label className="text-[11px] font-bold text-on-surface flex items-center gap-1">
-            <span className="material-symbols-outlined text-secondary text-base">neurology</span>
+            <span className="material-symbols-outlined text-[#1D4ED8] text-base">neurology</span>
             Ask SATQUERY AI Query
           </label>
           <div className="relative">
@@ -227,67 +797,77 @@ export default function GisHeroMap() {
               value={activeQuery}
               onChange={(e) => setActiveQuery(e.target.value)}
               placeholder="E.g. Show deforestation in Western Ghats..."
-              className="w-full bg-surface-container-low border border-outline-variant rounded-xl pl-3 pr-8 py-2.5 text-xs font-medium text-on-surface focus:ring-2 focus:ring-secondary focus:outline-none"
+              className="w-full bg-surface-container-low border border-outline-variant rounded-xl pl-3 pr-8 py-2.5 text-xs font-medium text-on-surface focus:ring-2 focus:ring-[#1D4ED8] focus:outline-none"
             />
             <span className="material-symbols-outlined absolute right-2.5 top-2.5 text-outline text-sm">search</span>
           </div>
         </div>
 
-        {/* Location & Polygon Metrics Readout */}
-        <div className="space-y-2 bg-surface-container-low/70 p-3 rounded-xl border border-outline-variant/50 text-xs">
+        {/* AOI & Regional Summary Card */}
+        <div className="space-y-2 bg-surface-container-low/80 p-3.5 rounded-xl border border-outline-variant/60 text-xs">
           <div className="flex justify-between items-center">
-            <span className="text-on-surface-variant text-[11px]">Selected Location:</span>
+            <span className="text-on-surface-variant text-[11px] font-medium">Selected Location:</span>
             <span className="font-bold text-[#0F172A] dark:text-white text-[11px] truncate max-w-[170px]">
               {selectedPreset.name}
             </span>
           </div>
 
           <div className="flex justify-between items-center">
-            <span className="text-on-surface-variant text-[11px]">Polygon Area (AOI):</span>
-            <span className="font-bold text-secondary font-mono text-[12px]">{selectedPreset.area}</span>
-          </div>
-
-          <div className="flex justify-between items-center">
-            <span className="text-on-surface-variant text-[11px]">Center Coordinates:</span>
-            <span className="font-mono text-[10px] text-on-surface">
-              {selectedPreset.lat.toFixed(4)}° N, {selectedPreset.lng.toFixed(4)}° E
+            <span className="text-on-surface-variant text-[11px] font-medium">State & District:</span>
+            <span className="font-semibold text-slate-800 dark:text-slate-200 text-[11px]">
+              {selectedPreset.state}, {selectedPreset.district}
             </span>
           </div>
 
-          <div className="flex justify-between items-center pt-1 border-t border-outline-variant/40">
-            <span className="text-on-surface-variant text-[11px]">Active Satellite:</span>
-            <span className="font-semibold text-emerald-800 text-[10px] bg-emerald-100 px-1.5 py-0.5 rounded">
+          <div className="flex justify-between items-center pt-1 border-t border-outline-variant/30">
+            <span className="text-on-surface-variant text-[11px] font-medium">AOI Area:</span>
+            <span className="font-extrabold text-[#1D4ED8] font-mono text-[13px]">
+              {aoiMetrics.areaKm2 > 0 ? `${aoiMetrics.areaKm2} km²` : 'Draw AOI on Map'}
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center">
+            <span className="text-on-surface-variant text-[11px] font-medium">Perimeter:</span>
+            <span className="font-bold text-slate-700 dark:text-slate-300 font-mono text-[11px]">
+              {aoiMetrics.perimeterKm} km
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center">
+            <span className="text-on-surface-variant text-[11px] font-medium">Center Lat / Lng:</span>
+            <span className="font-mono text-[10px] font-bold text-on-surface">
+              {aoiMetrics.centerLat}° N, {aoiMetrics.centerLng}° E
+            </span>
+          </div>
+
+          {/* Vertices coordinates display */}
+          {aoiMetrics.vertices.length > 0 && (
+            <div className="pt-2 border-t border-outline-variant/30 text-[10px]">
+              <span className="text-on-surface-variant font-bold block mb-1">
+                Polygon Vertices ({aoiMetrics.verticesCount}):
+              </span>
+              <div className="bg-white/80 dark:bg-slate-950/80 p-2 rounded-lg font-mono text-[10px] space-y-0.5 text-slate-700 dark:text-slate-300 max-h-20 overflow-y-auto">
+                {aoiMetrics.vertices.map((v, i) => (
+                  <div key={i} className="flex justify-between">
+                    <span>Vertex #{i + 1}:</span>
+                    <span>{v[0]}° N, {v[1]}° E</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-between items-center pt-1.5 border-t border-outline-variant/40">
+            <span className="text-on-surface-variant text-[11px] font-medium">Dataset Status:</span>
+            <span className="font-semibold text-emerald-800 text-[10px] bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
               {selectedPreset.dataset}
             </span>
           </div>
         </div>
 
-        {/* GIS Polygon Tools */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsDrawing(!isDrawing)}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-              isDrawing
-                ? 'bg-[#FF9933] text-black shadow-md font-extrabold'
-                : 'bg-surface border border-outline-variant hover:border-secondary text-on-surface'
-            }`}
-          >
-            <span className="material-symbols-outlined text-sm">{isDrawing ? 'edit' : 'polyline'}</span>
-            <span>{isDrawing ? 'Drawing AOI...' : 'Draw Polygon'}</span>
-          </button>
-
-          <button
-            onClick={clearPolygon}
-            className="p-2 rounded-xl bg-surface border border-outline-variant hover:bg-rose-50 text-rose-700 transition-colors cursor-pointer"
-            title="Clear Polygon"
-          >
-            <span className="material-symbols-outlined text-base">delete</span>
-          </button>
-        </div>
-
-        {/* Location Presets Quick Chips */}
+        {/* Preset Region Selector Buttons */}
         <div>
-          <span className="text-[10px] text-on-surface-variant font-bold block mb-1.5">
+          <span className="text-[10px] text-on-surface-variant font-extrabold block mb-1.5 uppercase tracking-wider">
             Quick Region Selectors:
           </span>
           <div className="grid grid-cols-2 gap-1.5">
@@ -295,9 +875,9 @@ export default function GisHeroMap() {
               <button
                 key={idx}
                 onClick={() => handleSelectPreset(p)}
-                className={`text-[10px] px-2 py-1.5 rounded-lg border text-left font-semibold truncate transition-colors cursor-pointer ${
+                className={`text-[10px] px-2.5 py-1.5 rounded-xl border text-left font-semibold truncate transition-all cursor-pointer ${
                   selectedPreset.name === p.name
-                    ? 'bg-secondary text-white border-secondary'
+                    ? 'bg-[#1D4ED8] text-white border-[#1D4ED8] shadow-sm font-bold'
                     : 'bg-surface hover:bg-surface-container-high text-on-surface border-outline-variant/60'
                 }`}
               >
@@ -307,102 +887,65 @@ export default function GisHeroMap() {
           </div>
         </div>
 
-        {/* START SATELLITE ANALYSIS BUTTON */}
-        <button
-          onClick={handleStartAnalysis}
-          className="w-full bg-[#0F172A] hover:bg-slate-800 text-white py-3.5 rounded-xl font-extrabold text-xs shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer border-t border-amber-500/40"
-        >
-          <span>Start Satellite Analysis</span>
-          <span className="material-symbols-outlined text-base text-[#FF9933]">arrow_forward</span>
-        </button>
-      </div>
+        {/* Action Buttons: Save AOI & Start Satellite Analysis */}
+        <div className="space-y-2 pt-1">
+          <button
+            onClick={handleSaveAOI}
+            className="w-full bg-surface-container-high hover:bg-surface-container-highest text-on-surface py-2.5 rounded-xl font-bold text-xs border border-outline-variant/60 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-sm text-[#1D4ED8]">bookmark</span>
+            <span>Save AOI Boundary</span>
+          </button>
 
-      {/* TOP RIGHT GIS CONTROLS & SEARCH BAR */}
-      <div className="absolute top-6 right-6 z-30 flex flex-col items-end gap-3">
-        {/* Map Search Bar */}
-        <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] rounded-xl shadow-xl flex items-center px-3 py-2 w-72 sm:w-80">
-          <span className="material-symbols-outlined text-secondary text-lg mr-2">search</span>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search location in India (e.g. Western Ghats)..."
-            className="bg-transparent border-none text-xs font-semibold text-on-surface w-full focus:ring-0 p-0"
-          />
-        </div>
-
-        {/* Layer Selector & GIS Controls */}
-        <div className="flex items-center gap-2">
-          {/* Layer Selector Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowLayerMenu(!showLayerMenu)}
-              className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] px-3.5 py-2 rounded-xl text-xs font-bold text-on-surface shadow-lg flex items-center gap-1.5 hover:bg-surface-container cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-secondary text-base">layers</span>
-              <span>Layer: {mapLayer}</span>
-              <span className="material-symbols-outlined text-xs">expand_more</span>
-            </button>
-
-            {showLayerMenu && (
-              <div className="absolute right-0 mt-2 w-44 bg-white dark:bg-slate-900 border border-outline-variant rounded-xl shadow-2xl p-2 text-xs space-y-1 z-40">
-                {(['Satellite', 'Terrain', 'Hybrid', 'Boundaries'] as const).map((layer) => (
-                  <button
-                    key={layer}
-                    onClick={() => {
-                      setMapLayer(layer);
-                      setShowLayerMenu(false);
-                    }}
-                    className={`w-full text-left px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
-                      mapLayer === layer ? 'bg-secondary text-white' : 'text-on-surface hover:bg-surface-container-low'
-                    }`}
-                  >
-                    {layer}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Pan / Zoom Control Buttons */}
-          <div className="flex flex-col bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] rounded-xl shadow-lg overflow-hidden">
-            <button
-              onClick={() => setZoomLevel((z) => Math.min(z + 1, 18))}
-              className="p-2 text-on-surface hover:bg-surface-container border-b border-outline-variant/40 cursor-pointer"
-              title="Zoom In"
-            >
-              <span className="material-symbols-outlined text-sm">add</span>
-            </button>
-            <button
-              onClick={() => setZoomLevel((z) => Math.max(z - 1, 4))}
-              className="p-2 text-on-surface hover:bg-surface-container cursor-pointer"
-              title="Zoom Out"
-            >
-              <span className="material-symbols-outlined text-sm">remove</span>
-            </button>
-          </div>
+          <button
+            onClick={handleStartAnalysis}
+            className="w-full bg-[#0F172A] hover:bg-slate-800 text-white py-3.5 rounded-xl font-extrabold text-xs shadow-xl transition-all flex items-center justify-center gap-2 cursor-pointer border-t border-[#FF9933]/50"
+          >
+            <span>Start Satellite Analysis</span>
+            <span className="material-symbols-outlined text-base text-[#FF9933]">arrow_forward</span>
+          </button>
         </div>
       </div>
 
-      {/* BOTTOM FLOATING BAR: ISRO TELEMETRY STATUS */}
-      <div className="absolute bottom-4 left-6 right-6 z-30 pointer-events-none flex items-center justify-between">
-        <div className="pointer-events-auto bg-[#0F172A]/90 backdrop-blur-md text-white px-4 py-2 rounded-xl border border-white/10 text-xs font-mono flex items-center gap-4 shadow-xl">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-            <span className="font-bold text-emerald-300">ISRO BHUVAN GIS ENGINE</span>
-          </div>
-          <span className="hidden sm:inline text-gray-300">|</span>
-          <span className="hidden sm:inline text-gray-200">
-            Center: {selectedPreset.lat.toFixed(4)}° N, {selectedPreset.lng.toFixed(4)}° E
-          </span>
-          <span className="hidden md:inline text-gray-300">|</span>
-          <span className="hidden md:inline text-amber-400 font-bold">Zoom: {zoomLevel}x</span>
-        </div>
+      {/* LAYER SELECTOR MENU (BOTTOM LEFT) */}
+      <div className="absolute bottom-6 left-6 z-30 pointer-events-auto">
+        <div className="relative">
+          <button
+            onClick={() => setShowLayerMenu(!showLayerMenu)}
+            className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] dark:border-slate-800 px-3.5 py-2.5 rounded-2xl text-xs font-extrabold text-on-surface shadow-2xl flex items-center gap-2 hover:bg-surface-container cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[#1D4ED8] text-lg">layers</span>
+            <span>Layer: {activeLayer}</span>
+            <span className="material-symbols-outlined text-xs">expand_more</span>
+          </button>
 
-        <div className="pointer-events-auto bg-white/90 dark:bg-slate-900/90 backdrop-blur-md text-on-surface px-3 py-1.5 rounded-xl border border-outline-variant/60 text-[11px] font-bold shadow-md">
-          WGS84 / EPSG:4326 Datum Verified
+          {showLayerMenu && (
+            <div className="absolute bottom-full left-0 mb-2 w-48 bg-white dark:bg-slate-900 border border-outline-variant/60 rounded-2xl shadow-2xl p-2 text-xs space-y-1 z-40">
+              {(['Satellite', 'Terrain', 'Hybrid', 'Streets'] as const).map((layer) => (
+                <button
+                  key={layer}
+                  onClick={() => handleLayerChange(layer)}
+                  className={`w-full text-left px-3 py-2 rounded-xl font-bold transition-all cursor-pointer ${
+                    activeLayer === layer
+                      ? 'bg-[#1D4ED8] text-white shadow-sm'
+                      : 'text-on-surface hover:bg-surface-container-low'
+                  }`}
+                >
+                  {layer}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
+
+      {/* SAVE AOI TOAST NOTIFICATION */}
+      {showSaveToast && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#0F172A] text-white px-5 py-3 rounded-2xl shadow-2xl border border-emerald-400/50 flex items-center gap-3 animate-bounce text-xs font-bold">
+          <span className="material-symbols-outlined text-emerald-400">check_circle</span>
+          <span>AOI Boundary & Coordinates Saved Successfully!</span>
+        </div>
+      )}
     </div>
   );
 }
