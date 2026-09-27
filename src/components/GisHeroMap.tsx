@@ -28,10 +28,14 @@ export default function GisHeroMap() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maptilersdk.Map | null>(null);
   const drawRef = useRef<MapboxDraw | null>(null);
+// Read API key from Netlify / .env.local
+const MAPTILER_KEY = process.env.NEXT_PUBLIC_SATQUERY_MAP_KEY;
 
-  // Read API Key strictly from process.env.NEXT_PUBLIC_MAPTILER_API_KEY
-  const MAPTILER_KEY =
-  process.env.NEXT_PUBLIC_MAPTILER_API_KEY || "u7UbzX99FBMn9NEo2Ly6";
+if (!MAPTILER_KEY) {
+  throw new Error("NEXT_PUBLIC_SATQUERY_MAP_KEY is missing.");
+}
+
+maptilersdk.config.apiKey = MAPTILER_KEY;
 
   // Presets across India
   const presets: LocationPreset[] = [
@@ -223,9 +227,18 @@ export default function GisHeroMap() {
     updateMetricsFromDraw(drawRef.current);
   }, [updateMetricsFromDraw]);
 
-  // Initialize MapLibre GL JS / MapTiler SDK Map
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
+  if (!mapContainerRef.current || mapRef.current) return;
+
+  // Configure MapTiler SDK key
+  if (!MAPTILER_KEY) {
+    console.error("NEXT_PUBLIC_SATQUERY_MAP_KEY is missing.");
+    return;
+  }
+
+  maptilersdk.config.apiKey = MAPTILER_KEY;
+
+  // High resolution Satellite Style fallback...
 
     // Configure MapTiler SDK key
     if (MAPTILER_KEY) {
