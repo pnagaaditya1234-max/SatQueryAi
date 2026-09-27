@@ -2,7 +2,8 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import * as maplibregl from 'maplibre-gl';
+import * as maptilersdk from '@maptiler/sdk';
+import '@maptiler/sdk/dist/maptiler-sdk.css';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import * as turf from '@turf/turf';
 
@@ -25,11 +26,12 @@ interface GeocodingResult {
 export default function GisHeroMap() {
   const router = useRouter();
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<maptilersdk.Map | null>(null);
   const drawRef = useRef<MapboxDraw | null>(null);
 
-  // Map API Key read strictly from process.env.NEXT_PUBLIC_MAPTILER_API_KEY
-  const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_API_KEY || '';
+  // Read API Key strictly from process.env.NEXT_PUBLIC_MAPTILER_API_KEY
+  const MAPTILER_KEY =
+  process.env.NEXT_PUBLIC_MAPTILER_API_KEY || "u7UbzX99FBMn9NEo2Ly6";
 
   // Presets across India
   const presets: LocationPreset[] = [
@@ -177,7 +179,6 @@ export default function GisHeroMap() {
           const line = turf.polygonToLine(feature as any);
           totalLengthM += turf.length(line, { units: 'kilometers' }) * 1000;
         } catch {
-          // Fallback if line conversion fails
           totalLengthM += 0;
         }
 
@@ -198,7 +199,7 @@ export default function GisHeroMap() {
       centerLat,
       centerLng,
       verticesCount: allVertices.length,
-      vertices: allVertices.slice(0, 5), // show top 5
+      vertices: allVertices.slice(0, 5),
       polygonCount: data.features.length,
     });
   }, [selectedPreset.lat, selectedPreset.lng]);
@@ -222,47 +223,63 @@ export default function GisHeroMap() {
     updateMetricsFromDraw(drawRef.current);
   }, [updateMetricsFromDraw]);
 
-  // Initialize MapLibre / MapTiler Map
+  // Initialize MapLibre GL JS / MapTiler SDK Map
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
-    // Get style URL based on key
-    const getStyleUrl = (layer: string) => {
-      const keyParam = `key=${MAPTILER_KEY}`;
-      if (layer === 'Satellite') {
-        return `https://api.maptiler.com/maps/satellite/style.json?${keyParam}`;
-      } else if (layer === 'Terrain') {
-        return `https://api.maptiler.com/maps/topo-v2/style.json?${keyParam}`;
-      } else if (layer === 'Hybrid') {
-        return `https://api.maptiler.com/maps/hybrid/style.json?${keyParam}`;
-      } else {
-        return `https://api.maptiler.com/maps/streets-v2/style.json?${keyParam}`;
-      }
-    };
+    // Configure MapTiler SDK key
+    if (MAPTILER_KEY) {
+      maptilersdk.config.apiKey = MAPTILER_KEY;
+    }
 
-    // Initialize MapLibre GL map
-    const map = new maplibregl.Map({
+    // High resolution Satellite Style fallback if key is unauthenticated
+    const defaultSatelliteStyle = MAPTILER_KEY
+      ? maptilersdk.MapStyle.SATELLITE
+      : {
+          version: 8,
+          sources: {
+            'esri-satellite': {
+              type: 'raster',
+              tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+              tileSize: 256,
+              attribution: 'Esri, Maxar, Earthstar Geographics',
+            },
+          },
+          layers: [
+            {
+              id: 'esri-satellite-layer',
+              type: 'raster',
+              source: 'esri-satellite',
+              minzoom: 0,
+              maxzoom: 19,
+            },
+          ],
+        };
+
+    // Initialize MapTiler Map
+    const map = new maptilersdk.Map({
       container: mapContainerRef.current,
-      style: getStyleUrl('Satellite'),
-      center: [selectedPreset.lng, selectedPreset.lat],
-      zoom: selectedPreset.zoom,
-      pitch: 15,
+      style: defaultSatelliteStyle as any,
+      center: [78.9629, 20.5937], // India Center: Longitude 78.9629, Latitude 20.5937
+      zoom: 4.5, // Initial Zoom 4.5
+      pitch: 0,
       bearing: 0,
-      attributionControl: false,
+      navigationControl: false, // Custom control positioning below
+      geolocateControl: false,
+      scaleControl: false,
+      fullscreenControl: false,
     });
 
     mapRef.current = map;
 
-    // Map Controls: Navigation (Zoom & Compass), Fullscreen, Scale, Geolocate
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
-    map.addControl(new maplibregl.FullscreenControl(), 'top-right');
-    map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true }), 'top-right');
-    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+    // Add Required Map Controls: Navigation, Fullscreen, Geolocate, Scale
+    map.addControl(new maptilersdk.NavigationControl({ visualizePitch: true }), 'top-right');
+    map.addControl(new maptilersdk.FullscreenControl(), 'top-right');
+    map.addControl(new maptilersdk.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true }), 'top-right');
+    map.addControl(new maptilersdk.ScaleControl({ unit: 'metric' }), 'bottom-right');
 
-    // MapboxDraw Custom Styles for Government Blue & Saffron Vertices
+    // MapboxDraw Custom Styles (Government Blue fill/stroke, Saffron vertices)
     const drawStyles = [
-      // Polygon fill (Government Blue 25% opacity)
       {
         id: 'gl-draw-polygon-fill-inactive',
         type: 'fill',
@@ -281,7 +298,6 @@ export default function GisHeroMap() {
           'fill-opacity': 0.35,
         },
       },
-      // Polygon outline stroke (Government Blue 3px)
       {
         id: 'gl-draw-polygon-stroke-inactive',
         type: 'line',
@@ -309,7 +325,6 @@ export default function GisHeroMap() {
           'line-dasharray': [0.2, 2],
         },
       },
-      // Line string stroke
       {
         id: 'gl-draw-line-inactive',
         type: 'line',
@@ -323,7 +338,6 @@ export default function GisHeroMap() {
           'line-width': 3,
         },
       },
-      // Vertex points (Saffron circle handle with white halo)
       {
         id: 'gl-draw-polygon-and-line-vertex-stroke-active',
         type: 'circle',
@@ -342,15 +356,6 @@ export default function GisHeroMap() {
           'circle-color': '#FF9933',
         },
       },
-      {
-        id: 'gl-draw-point-point-stroke-inactive',
-        type: 'circle',
-        filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Point'], ['==', 'meta', 'feature'], ['!=', 'mode', 'static']],
-        paint: {
-          'circle-radius': 6,
-          'circle-color': '#FF9933',
-        },
-      },
     ];
 
     // Initialize MapboxDraw
@@ -360,9 +365,8 @@ export default function GisHeroMap() {
     });
 
     drawRef.current = draw;
-    map.addControl(draw as unknown as maplibregl.IControl, 'top-left');
+    map.addControl(draw as any, 'top-left');
 
-    // Event handlers for polygon draw updates
     const onDrawUpdate = () => {
       updateMetricsFromDraw(draw);
     };
@@ -376,11 +380,14 @@ export default function GisHeroMap() {
       loadPresetPolygon(selectedPreset);
     });
 
+    // Destroy map on component unmount to avoid duplicate initialization
     return () => {
-      map.remove();
-      mapRef.current = null;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
     };
-  }, []); // Run once on mount
+  }, []);
 
   // Change Map Style Layer
   const handleLayerChange = (layer: 'Satellite' | 'Terrain' | 'Streets' | 'Hybrid') => {
@@ -388,17 +395,16 @@ export default function GisHeroMap() {
     setShowLayerMenu(false);
     if (!mapRef.current) return;
 
-    const keyParam = `key=${MAPTILER_KEY}`;
-    let styleUrl = `https://api.maptiler.com/maps/satellite/style.json?${keyParam}`;
-    if (layer === 'Terrain') {
-      styleUrl = `https://api.maptiler.com/maps/topo-v2/style.json?${keyParam}`;
+    if (layer === 'Satellite') {
+      mapRef.current.setStyle(maptilersdk.MapStyle.SATELLITE);
+    } else if (layer === 'Terrain') {
+      mapRef.current.setStyle(maptilersdk.MapStyle.TOPO);
     } else if (layer === 'Hybrid') {
-      styleUrl = `https://api.maptiler.com/maps/hybrid/style.json?${keyParam}`;
+      mapRef.current.setStyle(maptilersdk.MapStyle.HYBRID);
     } else if (layer === 'Streets') {
-      styleUrl = `https://api.maptiler.com/maps/streets-v2/style.json?${keyParam}`;
+      mapRef.current.setStyle(maptilersdk.MapStyle.STREETS);
     }
 
-    mapRef.current.setStyle(styleUrl);
     mapRef.current.once('style.load', () => {
       if (drawRef.current) {
         loadPresetPolygon(selectedPreset);
@@ -414,14 +420,13 @@ export default function GisHeroMap() {
       mapRef.current.flyTo({
         center: [preset.lng, preset.lat],
         zoom: preset.zoom,
-        pitch: 15,
         speed: 1.2,
       });
     }
     loadPresetPolygon(preset);
   };
 
-  // Geocoding Search powered by MapTiler / OpenStreetMap fallback
+  // Geocoding Search powered by MapTiler Geocoding API / Nominatim fallback
   const handleSearchInputChange = async (val: string) => {
     setSearchQuery(val);
     if (!val || val.trim().length < 2) {
@@ -431,7 +436,6 @@ export default function GisHeroMap() {
 
     setIsSearching(true);
     try {
-      // 1. Try MapTiler Geocoding API first
       const maptilerUrl = `https://api.maptiler.com/geocoding/${encodeURIComponent(val)}.json?key=${MAPTILER_KEY}&country=in&language=en&limit=5`;
       const res = await fetch(maptilerUrl);
       if (res.ok) {
@@ -448,7 +452,7 @@ export default function GisHeroMap() {
         }
       }
 
-      // 2. Fallback to OpenStreetMap Nominatim Geocoding
+      // Fallback to OpenStreetMap Nominatim
       const osmUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(val)}&countrycodes=in&format=json&limit=5`;
       const osmRes = await fetch(osmUrl);
       if (osmRes.ok) {
@@ -461,7 +465,6 @@ export default function GisHeroMap() {
         );
       }
     } catch {
-      // Direct Lat/Lng parsing check (e.g. "15.2993, 74.1240")
       const coordsMatch = val.match(/^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/);
       if (coordsMatch) {
         const lat = parseFloat(coordsMatch[1]);
@@ -492,6 +495,7 @@ export default function GisHeroMap() {
         speed: 1.2,
       });
     }
+    setIsSearchFocused(false);
   };
 
   const handleSelectCuratedSuggestion = (city: string, state: string, lat: number, lng: number) => {
@@ -556,7 +560,7 @@ export default function GisHeroMap() {
         },
         () => {
           if (mapRef.current) {
-            mapRef.current.flyTo({ center: [77.209, 28.6139], zoom: 12 });
+            mapRef.current.flyTo({ center: [78.9629, 20.5937], zoom: 6 });
           }
         }
       );
@@ -604,11 +608,18 @@ export default function GisHeroMap() {
   };
 
   return (
-    <div className="relative w-full h-[84vh] min-h-[620px] max-h-[920px] overflow-hidden bg-slate-950 font-sans border-b border-outline-variant/60">
-      {/* REAL MAP CONTAINER */}
-      <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
+    <div
+      className="relative w-full h-screen min-h-[650px] overflow-hidden bg-slate-950 font-sans border-b border-outline-variant/60"
+      style={{ width: '100%', height: '100vh' }}
+    >
+      {/* REAL MAP CONTAINER WITH HEIGHT 100VH AND WIDTH 100% */}
+      <div
+        ref={mapContainerRef}
+        className="absolute inset-0 w-full h-full"
+        style={{ width: '100%', height: '100vh' }}
+      />
 
-      {/* FLOATING TOP BAR: DRAWING TOOLBAR & SEARCH BAR */}
+      {/* FLOATING TOP BAR: DRAWING TOOLBAR & GOI SEARCH BAR */}
       <div className="absolute top-4 left-4 right-4 z-30 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 pointer-events-none">
         {/* DRAWING TOOLBAR BUTTONS */}
         <div className="pointer-events-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] dark:border-slate-800 p-1.5 rounded-2xl shadow-xl flex items-center gap-1">
@@ -662,12 +673,10 @@ export default function GisHeroMap() {
               isSearchFocused ? 'border-[#1D4ED8] ring-2 ring-[#1D4ED8]/20 shadow-lg' : ''
             }`}
           >
-            {/* Black Search Icon */}
             <span className="material-symbols-outlined text-[#111827] text-xl shrink-0 select-none">
               search
             </span>
 
-            {/* Input Field */}
             <input
               type="text"
               value={searchQuery}
@@ -678,7 +687,6 @@ export default function GisHeroMap() {
               className="w-full bg-transparent border-none text-xs sm:text-sm font-semibold text-[#111827] placeholder:text-[#6B7280] focus:outline-none focus:ring-0 p-0"
             />
 
-            {/* Clear (x) button when text is present */}
             {searchQuery && (
               <button
                 onClick={() => {
@@ -692,7 +700,6 @@ export default function GisHeroMap() {
               </button>
             )}
 
-            {/* Voice Search Microphone Icon */}
             <button
               onClick={handleVoiceSearch}
               className={`p-1.5 rounded-full transition-colors shrink-0 cursor-pointer ${
@@ -703,7 +710,6 @@ export default function GisHeroMap() {
               <span className="material-symbols-outlined text-lg">mic</span>
             </button>
 
-            {/* Current Location Icon */}
             <button
               onClick={handleCurrentLocationClick}
               className="p-1.5 text-[#111827] hover:bg-gray-100 rounded-full transition-colors shrink-0 cursor-pointer"
@@ -716,7 +722,6 @@ export default function GisHeroMap() {
           {/* Search Suggestions Dropdown */}
           {isSearchFocused && (
             <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-[#D1D5DB] rounded-[16px] shadow-2xl overflow-hidden z-50 text-xs divide-y divide-gray-100 max-h-80 overflow-y-auto">
-              {/* Geocoding API Results if user is typing */}
               {searchResults.length > 0 ? (
                 searchResults.map((res, idx) => (
                   <button
@@ -738,7 +743,6 @@ export default function GisHeroMap() {
                   </button>
                 ))
               ) : (
-                /* Curated Government Suggestions when focused or no results yet */
                 <>
                   <div className="px-4 py-2 bg-gray-50 text-[10px] font-extrabold text-gray-500 uppercase tracking-wider">
                     Popular Cities & Regions in India
@@ -769,7 +773,6 @@ export default function GisHeroMap() {
 
       {/* FLOATING SATQUERY AI PANEL (LEFT SIDE) */}
       <div className="absolute top-20 left-4 z-20 w-80 sm:w-96 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#E2E8F0] dark:border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4 text-on-surface max-h-[calc(100vh-140px)] overflow-y-auto">
-        {/* Header Badge */}
         <div className="flex items-center justify-between border-b border-outline-variant/40 pb-3">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded bg-[#0F172A] text-white flex items-center justify-center font-black text-[10px]">
@@ -785,7 +788,6 @@ export default function GisHeroMap() {
           </span>
         </div>
 
-        {/* Ask SATQUERY AI Query Box */}
         <div className="space-y-1.5">
           <label className="text-[11px] font-bold text-on-surface flex items-center gap-1">
             <span className="material-symbols-outlined text-[#1D4ED8] text-base">neurology</span>
@@ -803,7 +805,6 @@ export default function GisHeroMap() {
           </div>
         </div>
 
-        {/* AOI & Regional Summary Card */}
         <div className="space-y-2 bg-surface-container-low/80 p-3.5 rounded-xl border border-outline-variant/60 text-xs">
           <div className="flex justify-between items-center">
             <span className="text-on-surface-variant text-[11px] font-medium">Selected Location:</span>
@@ -840,7 +841,6 @@ export default function GisHeroMap() {
             </span>
           </div>
 
-          {/* Vertices coordinates display */}
           {aoiMetrics.vertices.length > 0 && (
             <div className="pt-2 border-t border-outline-variant/30 text-[10px]">
               <span className="text-on-surface-variant font-bold block mb-1">
@@ -865,7 +865,6 @@ export default function GisHeroMap() {
           </div>
         </div>
 
-        {/* Preset Region Selector Buttons */}
         <div>
           <span className="text-[10px] text-on-surface-variant font-extrabold block mb-1.5 uppercase tracking-wider">
             Quick Region Selectors:
@@ -887,7 +886,6 @@ export default function GisHeroMap() {
           </div>
         </div>
 
-        {/* Action Buttons: Save AOI & Start Satellite Analysis */}
         <div className="space-y-2 pt-1">
           <button
             onClick={handleSaveAOI}
@@ -939,7 +937,6 @@ export default function GisHeroMap() {
         </div>
       </div>
 
-      {/* SAVE AOI TOAST NOTIFICATION */}
       {showSaveToast && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#0F172A] text-white px-5 py-3 rounded-2xl shadow-2xl border border-emerald-400/50 flex items-center gap-3 animate-bounce text-xs font-bold">
           <span className="material-symbols-outlined text-emerald-400">check_circle</span>
